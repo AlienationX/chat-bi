@@ -1,0 +1,28 @@
+[project]
+name = "chat-bi"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12.8"
+dependencies = [
+    "gradio>=5.49.1",
+    "langchain>=1.0.8",
+    "langchain-ollama>=1.0.0",
+    "pandas>=2.3.3",
+    "plotly>=6.4.0",
+    "pymysql>=1.1.2",
+    "requests>=2.32.5",
+    "streamlit>=1.51.0",
+    "streamlit-authenticator>=0.4.2",
+    "streamlit-extras>=0.7.8",
+    "vanna[chromadb,ollama]>=0.7.9",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.4",
+]
+
+[tool.ruff]
+# 设置全局选项
+line-length = 128 # 行长度限制
