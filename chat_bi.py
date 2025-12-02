@@ -10,7 +10,7 @@ from langchain.agents import create_agent
 from langchain_community.agent_toolkits import create_sql_agent
 from langchain_community.llms import Ollama
 from langchain_community.utilities import SQLDatabase
-from langchain_ollama import OllamaLLM
+from langchain_ollama import ChatOllama
 from sqlalchemy import create_engine
 
 # 页面配置
@@ -31,50 +31,21 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 初始化会话状态
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-if "db_engine" not in st.session_state:
-    st.session_state.db_engine = None
-
-if "db_initialized" not in st.session_state:
-    st.session_state.db_initialized = False
-
 
 def format_timestamp(ts: Optional[datetime] = None) -> str:
     """格式化时间戳"""
     return (ts or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def connect_mysql(host: str, port: int, user: str, password: str, database: str) -> Optional[pymysql.Connection]:
-    """连接 MySQL 数据库"""
-    # try:
-    #     connection = pymysql.connect(
-    #         host=host,
-    #         port=port,
-    #         user=user,
-    #         password=password,
-    #         database=database,
-    #         charset="utf8mb4",
-    #         cursorclass=pymysql.cursors.DictCursor,
-    #     )
-    #     # 测试连接
-    #     connection.ping(reconnect=True)
-    #     return connection
-    # except pymysql.Error as e:
-    #     st.error(f"数据库连接失败: {str(e)}")
-    #     return None
-    # except Exception as e:
-    #     st.error(f"数据库连接失败: {str(e)}")
-    #     return None
-    db_engine = create_engine(get_sql_database_uri(host, port, user, password, database))
-    return db_engine
-
-
-def get_sql_database_uri(host: str, port: int, user: str, password: str, database: str) -> str:
+def get_sql_database_uri() -> str:
     """生成 SQLDatabase URI"""
-    return f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+    return "mysql+pymysql://readonly:123456@192.168.9.88:3306/admin_vip?charset=utf8mb4"
+
+
+def get_db_engine():
+    """连接 MySQL 数据库"""
+    db_engine = create_engine(get_sql_database_uri())
+    return db_engine
 
 
 def detect_query_intent(user_input: str, llm: Ollama) -> Dict[str, Any]:
@@ -231,40 +202,18 @@ def display_chart(df: pd.DataFrame, chart_type: str, x_column: Optional[str] = N
         st.dataframe(df)
 
 
+# 初始化会话状态
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "db_engine" not in st.session_state:
+    st.session_state.db_engine = get_db_engine()
+
+if "db_initialized" not in st.session_state:
+    st.session_state.db_initialized = False
+
 # 侧边栏配置
 with st.sidebar:
-    st.title("⚙️ 数据库配置")
-
-    # MySQL 连接配置
-    mysql_host = st.text_input("MySQL 主机", value="localhost")
-    mysql_port = st.number_input("MySQL 端口", value=3306, min_value=1, max_value=65535)
-    mysql_user = st.text_input("MySQL 用户名", value="root")
-    mysql_password = st.text_input("MySQL 密码", type="password", value="")
-    mysql_database = st.text_input("MySQL 数据库名", value="")
-
-    if st.button("连接数据库"):
-        if mysql_database:
-            db_engine = connect_mysql(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
-            if db_engine:
-                st.session_state.db_engine = db_engine
-                st.session_state.db_initialized = True
-                st.success("数据库连接成功！")
-            else:
-                st.session_state.db_initialized = False
-        else:
-            st.warning("请输入数据库名")
-
-    if st.session_state.db_initialized:
-        st.success("✅ 数据库已连接")
-        if st.button("断开连接"):
-            if st.session_state.db_engine:
-                st.session_state.db_engine.close()
-            st.session_state.db_engine = None
-            st.session_state.db_initialized = False
-            st.rerun()
-
-    st.divider()
-
     # Ollama 配置
     # 获取Ollama模型列表
     def get_ollama_models(ollama_url):
@@ -367,7 +316,7 @@ if prompt := st.chat_input("请输入你的问题或查询..."):
             # 需要查询数据库
             try:
                 # 创建 SQLDatabase
-                db_uri = get_sql_database_uri(mysql_host, mysql_port, mysql_user, mysql_password, mysql_database)
+                db_uri = get_sql_database_uri()
                 db = SQLDatabase.from_uri(db_uri)
 
                 # 生成 SQL

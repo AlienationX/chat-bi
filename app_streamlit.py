@@ -1,15 +1,12 @@
-import streamlit as st
-import requests
 import json
 import time
 from datetime import datetime
 
+import requests
+import streamlit as st
+
 # 页面配置
-st.set_page_config(
-    page_title="DeepSeek Chat",
-    page_icon="❉",
-    layout="wide"
-)
+st.set_page_config(page_title="DeepSeek Chat", page_icon="❉", layout="wide")
 
 # 隐藏右上角 Deploy 按钮并自定义聊天样式
 st.markdown(
@@ -47,34 +44,6 @@ st.markdown(
             line-height: 1.5;
         }
     </style>
-    <script>
-        // 自动滚动到底部，确保新消息可见
-        function scrollToBottom() {
-            // 滚动到聊天输入框
-            const chatInput = document.querySelector('[data-testid="stChatInput"]');
-            if (chatInput) {
-                chatInput.scrollIntoView({ behavior: 'smooth', block: 'end' });
-            }
-            // 或者滚动到页面底部
-            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-        }
-        // 页面加载完成后滚动到底部
-        window.addEventListener('load', scrollToBottom);
-        // 使用 MutationObserver 监听 DOM 变化，当有新消息时自动滚动
-        const observer = new MutationObserver(() => {
-            setTimeout(scrollToBottom, 100);
-        });
-        // 观察主内容区域的变化
-        observer.observe(document.body, { childList: true, subtree: true });
-        // Streamlit 特有的：监听 Streamlit 事件
-        if (window.parent !== window) {
-            window.parent.addEventListener('message', (event) => {
-                if (event.data.type === 'streamlit:render') {
-                    setTimeout(scrollToBottom, 200);
-                }
-            });
-        }
-    </script>
     """,
     unsafe_allow_html=True,
 )
@@ -97,9 +66,7 @@ def format_thinking_markdown(raw_text: str) -> str:
     return "\n".join(formatted_lines).strip()
 
 
-def build_conversation_prompt(
-    history: list[dict], latest_prompt: str, max_turns: int = 6
-) -> str:
+def build_conversation_prompt(history: list[dict], latest_prompt: str, max_turns: int = 6) -> str:
     """
     将最近 max_turns 轮对话整理为指令式文本，帮助模型保留上下文，
     并以 'Assistant:' 结尾提示模型继续生成。
@@ -132,6 +99,7 @@ if "model_loaded" not in st.session_state:
 if "history_panel_open" not in st.session_state:
     st.session_state.history_panel_open = False
 
+
 # 获取Ollama模型列表
 def get_ollama_models(ollama_url):
     try:
@@ -143,32 +111,22 @@ def get_ollama_models(ollama_url):
     except Exception as e:
         st.warning(f"无法获取模型列表: {str(e)}")
     return []
-    
+
+
 # 侧边栏配置
 with st.sidebar:
     st.title("⚙️ 设置")
-    
+
     # 设置为只读显示
     ollama_url = "http://localhost:11434"
     # 显示固定的 Ollama API 地址
     st.markdown(f"**Ollama API 地址:** {ollama_url}")
-    
+
     # 获取并显示模型列表下拉选择
     models = get_ollama_models(ollama_url)
-    model_name = st.selectbox(
-        "选择模型",
-        options=models,
-        index=0,
-        help="从已下载的Ollama模型中选择"
-    )
-    
-    temperature = st.slider(
-        "Temperature",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.7,
-        help="控制回答的随机性"
-    )
+    model_name = st.selectbox("选择模型", options=models, index=0, help="从已下载的Ollama模型中选择")
+
+    temperature = st.slider("Temperature", min_value=0.0, max_value=1.0, value=0.7, help="控制回答的随机性")
 
     st.divider()
 
@@ -179,7 +137,7 @@ with st.sidebar:
     if st.button("清空对话记录"):
         st.session_state.messages = []
         st.rerun()
-    
+
     if st.button("检查模型状态"):
         try:
             response = requests.get(f"{ollama_url}/api/tags")
@@ -212,7 +170,7 @@ for message in st.session_state.messages:
 # if prompt := st.chat_input("请输入你的问题...", accept_file=True, file_type=["jpg", "jpeg", "png", "docx", "doc", "pdf", "xlsx", "xls", "csv", "txt"]):
 if prompt := st.chat_input("请输入你的问题..."):
     user_timestamp = format_timestamp()
-    
+
     # 显示用户消息在右侧
     with st.chat_message("user"):
         # 实时渲染用户输入的 Markdown 内容
@@ -220,9 +178,7 @@ if prompt := st.chat_input("请输入你的问题..."):
         st.caption(f"{user_timestamp}")
 
         # 添加用户消息
-        st.session_state.messages.append(
-            {"role": "user", "content": prompt, "timestamp": user_timestamp}
-        )
+        st.session_state.messages.append({"role": "user", "content": prompt, "timestamp": user_timestamp})
 
     # 获取模型回复 - 助手消息显示在左侧
     with st.chat_message("assistant"):
@@ -231,33 +187,29 @@ if prompt := st.chat_input("请输入你的问题..."):
         response_placeholder = st.empty()
         meta_placeholder = st.empty()
         start_time = time.time()
-        
+
         # 发送请求并处理流式响应
         try:
             # 首先显示spinner
             with st.spinner("Thinking...", show_time=True):
                 # 设置为流式请求，并携带最近上下文
-                conversation_prompt = build_conversation_prompt(
-                    st.session_state.messages, prompt
-                )
+                conversation_prompt = build_conversation_prompt(st.session_state.messages, prompt)
                 data = {
                     "model": model_name,
                     "prompt": conversation_prompt,
                     "stream": True,  # 开启流式响应
-                    "options": {
-                        "temperature": temperature
-                    }
+                    "options": {"temperature": temperature},
                 }
-                
+
                 # 发送请求（spinner会在这里结束）
                 response = requests.post(
                     f"{ollama_url}/api/generate",
                     json=data,
                     stream=True,  # 开启流式请求
-                    timeout=120
+                    timeout=120,
                 )
                 response.raise_for_status()
-            
+
             # spinner已关闭，开始处理流式响应
             # 处理流式响应
             full_thinking = ""
@@ -280,13 +232,13 @@ if prompt := st.chat_input("请输入你的问题..."):
                         full_response += chunk_data["response"]
                         # 更新显示
                         response_placeholder.markdown(full_response)
-                    
+
                     # 如果收到完成标志，退出循环
                     if chunk_data.get("done", False):
                         break
                     # 短暂延迟，使流式效果更明显
                     time.sleep(0.05)
-            
+
             assistant_timestamp = format_timestamp()
             elapsed = time.time() - start_time
             formatted_thinking = format_thinking_markdown(full_thinking)
@@ -298,9 +250,7 @@ if prompt := st.chat_input("请输入你的问题..."):
             final_content = "\n\n".join(content_parts).strip()
 
             # 使用占位符更新元信息，避免重复创建元素
-            st.caption(
-                f"{assistant_timestamp} spend: {elapsed:.1f} s"
-            )
+            st.caption(f"{assistant_timestamp} spend: {elapsed:.1f} s")
 
             # 确保响应被保存到会话状态
             st.session_state.messages.append(
@@ -311,9 +261,7 @@ if prompt := st.chat_input("请输入你的问题..."):
                     "duration": elapsed,
                 }
             )
-                
+
         except Exception as e:
             error_msg = f"请求失败: {str(e)}"
             st.error(error_msg)
-
-    

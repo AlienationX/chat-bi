@@ -5,9 +5,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12.8"
 dependencies = [
+    "aiosqlite>=0.21.0",
+    "chainlit>=2.9.1",
     "gradio>=5.49.1",
+    "greenlet>=3.2.4",
     "langchain>=1.0.8",
     "langchain-ollama>=1.0.0",
+    "openai>=2.8.1",
     "pandas>=2.3.3",
     "plotly>=6.4.0",
     "pymysql>=1.1.2",
