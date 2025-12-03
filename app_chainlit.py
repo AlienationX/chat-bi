@@ -182,18 +182,26 @@ def get_data_layer():
 
 # @cl.set_chat_profiles
 # async def chat_profile(current_user: cl.User):
-#     if current_user.metadata["role"] != "ADMIN":
-#         return None
+#     # if current_user.metadata["role"] != "ADMIN":
+#     #     return None
 
 #     return [
 #         cl.ChatProfile(
-#             name="GPT-3.5",
-#             markdown_description="The underlying LLM model is **GPT-3.5**, a *175B parameter model* trained on 410GB of text data.",
-#         ),
-#         cl.ChatProfile(
-#             name="GPT-4",
-#             markdown_description="The underlying LLM model is **GPT-4**, a *1.5T parameter model* trained on 3.5TB of text data.",
+#             name="My Chat Profile",
 #             icon="https://picsum.photos/250",
+#             markdown_description="The underlying LLM model is **GPT-3.5**, a *175B parameter model* trained on 410GB of text data.",
+#             starters=[
+#                 cl.Starter(
+#                     label="Morning routine ideation",
+#                     message="Can you help me create a personalized morning routine that would help increase my productivity throughout the day? Start by asking me about my current habits and what activities energize me in the morning.",
+#                     icon="/public/idea.svg",
+#                 ),
+#                 cl.Starter(
+#                     label="Explain superconductors",
+#                     message="Explain superconductors like I'm five years old.",
+#                     icon="/public/learn.svg",
+#                 ),
+#             ],
 #         ),
 #         cl.ChatProfile(
 #             name="GPT-5",
@@ -201,37 +209,6 @@ def get_data_layer():
 #             icon="https://picsum.photos/200",
 #         ),
 #     ]
-
-
-@cl.set_chat_profiles
-async def chat_profile(current_user: cl.User):
-    if current_user.metadata["role"] != "ADMIN":
-        return None
-
-    return [
-        cl.ChatProfile(
-            name="My Chat Profile",
-            icon="https://picsum.photos/250",
-            markdown_description="The underlying LLM model is **GPT-3.5**, a *175B parameter model* trained on 410GB of text data.",
-            starters=[
-                cl.Starter(
-                    label="Morning routine ideation",
-                    message="Can you help me create a personalized morning routine that would help increase my productivity throughout the day? Start by asking me about my current habits and what activities energize me in the morning.",
-                    icon="/public/idea.svg",
-                ),
-                cl.Starter(
-                    label="Explain superconductors",
-                    message="Explain superconductors like I'm five years old.",
-                    icon="/public/learn.svg",
-                ),
-            ],
-        ),
-        cl.ChatProfile(
-            name="GPT-5",
-            markdown_description="The underlying LLM model is **GPT-5**.",
-            icon="https://picsum.photos/200",
-        ),
-    ]
 
 
 @cl.set_starters
@@ -263,7 +240,7 @@ async def set_starters():
 
 @cl.on_chat_start
 async def chat_start():
-    print(">>> on_chat_start")
+    print(">>> on_chat_start, 新建会话就会触发！！！")
 
     start_ollama()
 
@@ -272,7 +249,17 @@ async def chat_start():
 
     cl.user_session.set("chat_history", [])
 
-    settings = await cl.ChatSettings(
+    settings = cl.user_session.get("settings", {})
+    if not settings:
+        settings = {
+            "Model": "deepseek-r1:8b",
+            "Think": True,
+            "Temperature": 0.7,
+            "Tags": ["Answer", "Chat-BI"],
+        }
+        cl.user_session.set("settings", settings)
+
+    await cl.ChatSettings(
         [
             Select(
                 id="Model",
@@ -282,21 +269,20 @@ async def chat_start():
                     "deepseek-v3.1:671b-cloud",
                     "qwen2.5:1.5b",
                 ],
-                initial_index=0,
+                initial_value=settings["Model"],
             ),
-            Switch(id="Think", label="Enable thinking for models", initial=True),
+            Switch(id="Think", label="Enable thinking for models", initial=settings["Think"]),
             Slider(
                 id="Temperature",
                 label="OpenAI - Temperature",
-                initial=0.7,
+                initial=settings["Temperature"],
                 min=0,
                 max=1,
                 step=0.1,
             ),
-            Tags(id="Tags", label="OpenAI - StopSequence", initial=["Answer", "Chat-BI"]),
+            Tags(id="Tags", label="OpenAI - StopSequence", initial=settings["Tags"]),
         ]
     ).send()
-    cl.user_session.set("settings", settings)
 
     # 初始化客户端，关键是指定 base_url 为 Ollama 服务的地址
     client = AsyncOpenAI(
@@ -319,7 +305,7 @@ async def chat_start():
     )
     cl.user_session.set("agent", agent)
 
-    await cl.Message(content="你好！我已连接本地模型，请开始提问。").send()
+    # await cl.Message(content="你好！我已连接本地模型，请开始提问。").send()
 
 
 @cl.on_chat_resume
@@ -338,7 +324,7 @@ async def chat_resume(thread: ThreadDict):
                     "deepseek-v3.1:671b-cloud",
                     "qwen2.5:1.5b",
                 ],
-                initial=settings["Model"],
+                initial_value=settings["Model"],
             ),
             Switch(id="Think", label="Enable thinking for models", initial=settings["Think"]),
             Slider(
@@ -382,6 +368,7 @@ async def chat_resume(thread: ThreadDict):
 async def settings_update(settings):
     # 更新设置
     print(">>> on_settings_update", settings)
+    cl.user_session.set("settings", settings)
     # TODO: 更新和存储到 cl.User.metadata 中
     # cl.user_session.get("user").metadata = settings
 
@@ -404,12 +391,11 @@ async def main(message: cl.Message):
 
         settings = cl.user_session.get("settings")
         model = settings["Model"]
-        print(">>>> settings", type(settings))
         print(">>>> settings", settings)
         print(">>>> model", model)
 
         # qwen2.5:1.5b 不是推理模型，不支持 thinking
-        settings["Think"] = False if settings["Think"] and model == "qwen2.5:1.5b" else True
+        settings["Think"] = False if settings["Think"] and model == "qwen2.5:1.5b" else settings["Think"]
 
         # ###########询问用户是否继续#################
         # res = await cl.AskActionMessage(
@@ -430,7 +416,8 @@ async def main(message: cl.Message):
             # qwen2.5:1.5b, deepseek-v3.1:671b-cloud, deepseek-r1:8b
             model=model,  # 选择任何你本地已有的模型,deepseek-r1:8b不支持工具调用
             temperature=settings["Temperature"],  # 控制生成结果的随机性
-            num_ctx=4096,  # 设置上下文窗口大小
+            reasoning=settings["Think"],
+            # num_ctx=4096,  # 设置上下文窗口大小
         )
 
         agent = create_agent(
@@ -439,45 +426,46 @@ async def main(message: cl.Message):
             system_prompt="You are a helpful assistant",
         )
 
+        assistant_response = ""
+        msg = cl.Message(content="")
+
         thinking = False
         start_time = time.time()
-
-        msg = cl.Message(content="")
         if settings["Think"]:
             async with cl.Step(name="Thinking", type="llm") as thinking_step:
                 for token, metadata in agent.stream(
                     {"messages": chat_history},
                     stream_mode="messages",
                 ):
+                    reasoning = token.content_blocks[-1].get("reasoning", "") if token.content_blocks else ""
+                    if reasoning:
+                        # 流式传输思考内容
+                        thinking = True
+                        # await thinking_step.stream_token(reasoning)
+                        thinking_step.output = reasoning
+
                     content = token.content_blocks[-1].get("text", "") if token.content_blocks else ""
                     if content:
-                        print(f"thinking node: {metadata}")
-                        print(f"thinking content: {token}")
-                        print("\n")
-                        thinking = True
-                        await thinking_step.stream_token(content)
-                    elif settings["Think"] and thinking:
-                        print(">>>> Thinking End")
-                        thinking = False
-                        thought_duration = round(time.time() - start_time)
-                        thinking_step.name = f"Thought for {thought_duration}s"
-                        await thinking_step.update()
-                        break
+                        # 更新思考步骤名称和时间
+                        if thinking:
+                            thought_duration = round(time.time() - start_time)
+                            thinking_step.name = f"Thought for {thought_duration}s"
+                            await thinking_step.update()
+                            thinking = False
+                            break
 
-        assistant_response = ""
-        for token, metadata in agent.stream(
-            {"messages": chat_history},
-            stream_mode="messages",
-        ):
-            content = token.content_blocks[-1].get("text", "") if token.content_blocks else ""
-            if content:
-                print(f"node: {metadata['langgraph_node']}")
-                print(f"content: {token.content_blocks}")
-                print("\n")
-                assistant_response += content
-                await msg.stream_token(content)
-                # 短暂延迟，使流式效果更明显
-                time.sleep(0.1)
+                        # 更新响应内容
+                        assistant_response += content
+                        await msg.stream_token(content)
+        else:
+            for token, metadata in agent.stream(
+                {"messages": chat_history},
+                stream_mode="messages",
+            ):
+                content = token.content_blocks[-1].get("text", "") if token.content_blocks else ""
+                if content:
+                    assistant_response += content
+                    await msg.stream_token(content)
 
         chat_history.append(
             {
@@ -485,7 +473,6 @@ async def main(message: cl.Message):
                 "content": assistant_response,
             }
         )
-        print("cccccc =>", chat_history)
         await msg.update()
 
         # 测试 langchain 的流式响应
