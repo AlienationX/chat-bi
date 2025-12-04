@@ -103,6 +103,16 @@ cot = "full"
 # Specify a CSS file that can be used to customize the user interface.
 # The CSS file can be served from the public directory or via an external link.
 # custom_css = "/public/test.css"
+custom_css = """
+/* 使所有类型为 ‘llm’ 的步骤默认展开 */
+.step[type="llm"] {
+    --data-state: open;
+}
+/* 更激进：使所有步骤默认展开（无论类型） */
+.step {
+    --data-state: open;
+}
+"""
 
 # Specify additional attributes for a custom CSS file
 # custom_css_attributes = "media=\"print\""

@@ -7,7 +7,7 @@ import chainlit as cl
 import ollama
 from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
 from chainlit.data.storage_clients.base import BaseStorageClient
-from chainlit.input_widget import Select, Slider, Switch, Tags
+from chainlit.input_widget import Select, Slider, Switch, Tags, TextInput
 from chainlit.types import ThreadDict
 from langchain.agents import create_agent
 from langchain_ollama import ChatOllama
@@ -16,6 +16,13 @@ from langgraph.config import get_stream_writer
 
 # 导入兼容OpenAI的客户端库
 from openai import AsyncOpenAI
+
+"""chainlit run app.py --port 8000 --workers 2"""
+
+# 设置 Chainlit JWT secret（用于密码认证）
+# 如果环境变量中已设置，则使用环境变量中的值；否则使用默认值
+os.environ.setdefault("CHAINLIT_AUTH_SECRET", ">yfb:aoqDnz~799ZlPkF?lIt?KJ~V4Kfq=2/$Fv/mq$K=T3Jac_Ztyq-D8~EUWYN")
+
 
 commands = [
     {"id": "Picture", "icon": "image", "description": "Use DALL-E"},
@@ -57,11 +64,6 @@ class LocalStorageClient(BaseStorageClient):
     async def close(self) -> None:
         """关闭存储客户端"""
         pass
-
-
-# 设置 Chainlit JWT secret（用于密码认证）
-# 如果环境变量中已设置，则使用环境变量中的值；否则使用默认值
-os.environ.setdefault("CHAINLIT_AUTH_SECRET", ">yfb:aoqDnz~799ZlPkF?lIt?KJ~V4Kfq=2/$Fv/mq$K=T3Jac_Ztyq-D8~EUWYN")
 
 
 def get_weather(city: str) -> str:
@@ -168,7 +170,8 @@ def get_data_layer():
     data_path = Path(__file__).parent / "data"
     data_path.mkdir(exist_ok=True)  # 确保数据目录存在
     sqlite_conninfo = f"sqlite+aiosqlite:///./{data_path.name}/chat_sessions.db"
-    return SQLAlchemyDataLayer(conninfo=sqlite_conninfo)
+    sqlite_conninfo_with_params = f"{sqlite_conninfo}?cache=shared&journal_mode=WAL"
+    return SQLAlchemyDataLayer(conninfo=sqlite_conninfo_with_params)
 
     # # 配置本地文件存储路径
     # local_storage_path = f"./{data_path.name}/uploads"  # 存储上传文件的目录
@@ -240,7 +243,7 @@ async def set_starters():
 
 @cl.on_chat_start
 async def chat_start():
-    print(">>> on_chat_start, 新建会话就会触发！！！")
+    print(">>> on_chat_start, 新建会话也会触发！！！")
 
     start_ollama()
 
@@ -426,46 +429,43 @@ async def main(message: cl.Message):
             system_prompt="You are a helpful assistant",
         )
 
+        stream = agent.stream(
+            {"messages": chat_history},
+            stream_mode="messages",
+        )
+
         assistant_response = ""
         msg = cl.Message(content="")
 
-        thinking = False
-        start_time = time.time()
         if settings["Think"]:
+            start_time = time.time()
             async with cl.Step(name="Thinking", type="llm") as thinking_step:
-                for token, metadata in agent.stream(
-                    {"messages": chat_history},
-                    stream_mode="messages",
-                ):
+                for token, metadata in stream:
                     reasoning = token.content_blocks[-1].get("reasoning", "") if token.content_blocks else ""
                     if reasoning:
                         # 流式传输思考内容
-                        thinking = True
-                        # await thinking_step.stream_token(reasoning)
-                        thinking_step.output = reasoning
+                        await thinking_step.stream_token(reasoning)
+                        # thinking_step.output = reasoning
 
                     content = token.content_blocks[-1].get("text", "") if token.content_blocks else ""
                     if content:
                         # 更新思考步骤名称和时间
-                        if thinking:
-                            thought_duration = round(time.time() - start_time)
-                            thinking_step.name = f"Thought for {thought_duration}s"
-                            await thinking_step.update()
-                            thinking = False
-                            break
+                        thought_duration = round(time.time() - start_time)
+                        thinking_step.name = f"Thought for {thought_duration}s"
+                        await thinking_step.update()
 
-                        # 更新响应内容
+                        # 更新首个content
                         assistant_response += content
                         await msg.stream_token(content)
-        else:
-            for token, metadata in agent.stream(
-                {"messages": chat_history},
-                stream_mode="messages",
-            ):
-                content = token.content_blocks[-1].get("text", "") if token.content_blocks else ""
-                if content:
-                    assistant_response += content
-                    await msg.stream_token(content)
+                        # 关闭thinking_step
+                        break
+
+        # 流式传输 assistant_response 内容
+        for token, metadata in stream:
+            content = token.content_blocks[-1].get("text", "") if token.content_blocks else ""
+            if content:
+                assistant_response += content
+                await msg.stream_token(content)
 
         chat_history.append(
             {
@@ -475,76 +475,11 @@ async def main(message: cl.Message):
         )
         await msg.update()
 
-        # 测试 langchain 的流式响应
-        # for chunk in agent.stream(
-        #     {"messages": [{"role": "user", "content": "What is the weather in 北京?"}]}, stream_mode=["messages", "custom"]
-        # ):
-        #     print("test >>>>", chunk)
-
-        # def generate_chunks():
-        #     return ollama.chat(model=model, messages=chat_history, stream=True, think=True)
-
-        # loop = asyncio.get_event_loop()
-        # stream = await loop.run_in_executor(None, generate_chunks)
-
-        # assistant_response = ""
-        # for chunk in stream:
-        #     print(chunk)
-        #     content = chunk.get("message", {}).get("content", "")
-        #     if content:
-        #         assistant_response += content
-        #         await cb.stream_token(content)
-        # await cb.update()
-
-        # async for chunk in response:
-        #     if hasattr(chunk.choices[0].delta, "reasoning") and chunk.choices[0].delta.reasoning is not None:
-        #         await cb.stream_token(chunk.choices[0].delta.reasoning)
-        #     if chunk.choices[0].delta.content is not None:
-        #         await cb.stream_token(chunk.choices[0].delta.content)
-        # await cb.update()
-
-        # # 从用户会话中获取客户端，如果不存在则初始化
-        # client = cl.user_session.get("client")
-        # if client is None:
-        #     # 如果客户端不存在，初始化它
-        #     client = AsyncOpenAI(
-        #         base_url="http://localhost:11434/v1",
-        #         api_key="unnecessary",
-        #     )
-        #     cl.user_session.set("client", client)
-
-        # # 使用客户端向本地 Ollama 模型发送请求
-        # response = await client.chat.completions.create(
-        #     model="deepseek-r1:8b",  # 此处替换为您通过 `ollama pull` 下载的模型名称
-        #     messages=[
-        #         {"role": "system", "content": "你是一个乐于助人的助手，使用中文回答。"},
-        #         {"role": "user", "content": message.content},
-        #     ],
-        #     stream=True,  # 启用流式传输，实现类似 ChatGPT 的逐字输出效果
-        #     temperature=0.7,  # 控制回复的随机性，可根据需要调整
-        # )
-
         # # 判断是否调用工具
         # # if chunk.choices[0].delta.tool_calls is not None:
         # tool_res = await tool()
         # await cl.Message(content=tool_res).send()
 
-        # # 创建 Chainlit 消息对象用于流式响应
-        # msg = cl.Message(content="")
-        # # await msg.send()
-
-        # async for chunk in response:
-        #     # print(chunk)
-
-        #     # 1. thinking内容
-        #     if hasattr(chunk.choices[0].delta, "reasoning") and chunk.choices[0].delta.reasoning is not None:
-        #         await msg.stream_token(chunk.choices[0].delta.reasoning)
-        #     # 2. 正常内容
-        #     if chunk.choices[0].delta.content is not None:
-        #         await msg.stream_token(chunk.choices[0].delta.content)
-
-        # # 流式传输完成后更新消息
-        # await msg.update()
     except Exception:
         import traceback
 
