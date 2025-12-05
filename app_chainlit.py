@@ -1,28 +1,28 @@
-import asyncio
-import os
+import threading
 import time
 from pathlib import Path
 
 import chainlit as cl
-import ollama
 from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
 from chainlit.data.storage_clients.base import BaseStorageClient
-from chainlit.input_widget import Select, Slider, Switch, Tags, TextInput
+from chainlit.input_widget import Select, Slider, Switch, Tags
 from chainlit.types import ThreadDict
 from langchain.agents import create_agent
 from langchain_ollama import ChatOllama
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.config import get_stream_writer
+from mcp import ClientSession
 
 # 导入兼容OpenAI的客户端库
 from openai import AsyncOpenAI
+
+# 全局变量存储 MCP 服务线程
+_mcp_threads = []
+_mcp_servers = []
 
 """chainlit run app.py --port 8000 --workers 2"""
 
 # 设置 Chainlit JWT secret（用于密码认证）
 # 如果环境变量中已设置，则使用环境变量中的值；否则使用默认值
-os.environ.setdefault("CHAINLIT_AUTH_SECRET", ">yfb:aoqDnz~799ZlPkF?lIt?KJ~V4Kfq=2/$Fv/mq$K=T3Jac_Ztyq-D8~EUWYN")
-
 
 commands = [
     {"id": "Picture", "icon": "image", "description": "Use DALL-E"},
@@ -75,8 +75,96 @@ def get_weather(city: str) -> str:
     return f"It's always sunny in {city}!"
 
 
-def start_ollama():
-    print("start ollama...")
+def _run_mcp_server(module_name: str, server_name: str, port: int, transport: str = "streamable-http"):
+    """在后台线程中运行 MCP 服务器"""
+    try:
+        # 动态导入 MCP 模块
+        import importlib
+
+        module_path = f"mcp_servers.{module_name}"
+
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError as import_error:
+            # 如果导入失败，尝试直接导入模块
+            print(f"⚠️ 尝试导入 {module_path} 失败: {import_error}")
+            # 尝试使用 sys.path 添加当前目录
+            import sys
+            from pathlib import Path
+
+            current_dir = Path(__file__).parent
+            if str(current_dir) not in sys.path:
+                sys.path.insert(0, str(current_dir))
+            module = importlib.import_module(f"mcp_servers.{module_name}")
+
+        # 获取 mcp 对象
+        mcp_instance = getattr(module, "mcp", None)
+        if mcp_instance is None:
+            print(f"❌ 未找到 {server_name} MCP 服务器实例 (模块: {module_path})")
+            return
+
+        # 直接修改端口设置
+        if hasattr(mcp_instance, "settings"):
+            mcp_instance.settings.port = port
+            mcp_instance.settings.host = "127.0.0.1"
+        else:
+            print(f"⚠️ {server_name} MCP 服务器实例没有 settings 属性，使用默认端口")
+
+        print(f"🚀 启动 {server_name} MCP 服务器 (transport: {transport}, port: {port})...")
+        # 运行 MCP 服务器（阻塞调用）
+        mcp_instance.run(transport=transport)
+    except Exception as e:
+        print(f"❌ {server_name} MCP 服务器启动失败: {str(e)}")
+        import traceback
+
+        traceback.print_exc()
+
+
+def start_mcp():
+    """启动 MCP 服务器"""
+    global _mcp_threads, _mcp_servers
+
+    print("🚀 正在启动 MCP 服务器...")
+
+    # 定义要启动的 MCP 服务 (模块名, 服务器名, 端口, 传输方式)
+    # 从 8001 开始分配端口，避免与 Chainlit 的 8000 端口冲突
+    mcp_services = [
+        ("db_postgresql", "PostgreSQL Database", 8001, "streamable-http"),
+        ("math", "Math", 8002, "streamable-http"),
+    ]
+
+    # 为每个服务创建后台线程
+    for module_name, server_name, port, transport in mcp_services:
+        thread = threading.Thread(
+            target=_run_mcp_server,
+            args=(module_name, server_name, port, transport),
+            daemon=True,  # 设置为守护线程，主进程退出时自动终止
+            name=f"MCP-{server_name}",
+        )
+        thread.start()
+        _mcp_threads.append(thread)
+        print(f"✅ {server_name} MCP 服务器线程已启动 (端口: {port})")
+
+    # 等待一小段时间确保服务器启动
+    time.sleep(1)
+    print(f"✅ 已启动 {len(_mcp_threads)} 个 MCP 服务器")
+
+
+def stop_mcp():
+    """停止 MCP 服务器"""
+    global _mcp_threads, _mcp_servers
+
+    print("🛑 正在停止 MCP 服务器...")
+
+    # 由于使用守护线程，主进程退出时会自动终止
+    # 但我们可以显式地标记它们
+    for thread in _mcp_threads:
+        if thread.is_alive():
+            print(f"🛑 停止 MCP 服务器线程: {thread.name}")
+
+    _mcp_threads.clear()
+    _mcp_servers.clear()
+    print("✅ MCP 服务器已停止")
 
 
 @cl.step(type="tool")
@@ -84,6 +172,21 @@ async def tool():
     print("tool called...")
     await cl.sleep(1)
     return "Response from the tool!"
+
+
+# 这个函数只在应用启动时执行一次
+@cl.on_app_startup
+async def app_startup():
+    start_mcp()
+    print("✅ 应用启动：AI客户端已初始化")
+
+
+@cl.on_app_shutdown
+async def app_shutdown():
+    """应用关闭时执行清理"""
+    print("🛑 应用关闭：正在停止 MCP 服务器...")
+    stop_mcp()
+    print("✅ 应用已关闭")
 
 
 # 密码认证回调函数
@@ -171,16 +274,15 @@ def get_data_layer():
     data_path.mkdir(exist_ok=True)  # 确保数据目录存在
     sqlite_conninfo = f"sqlite+aiosqlite:///./{data_path.name}/chat_sessions.db"
     sqlite_conninfo_with_params = f"{sqlite_conninfo}?cache=shared&journal_mode=WAL"
-    return SQLAlchemyDataLayer(conninfo=sqlite_conninfo_with_params)
 
-    # # 配置本地文件存储路径
-    # local_storage_path = f"./{data_path.name}/uploads"  # 存储上传文件的目录
-    # # 创建本地存储客户端
-    # storage_client = LocalStorageClient(local_storage_path)
-    # # 创建 SQLite 数据层
-    # data_layer = SQLAlchemyDataLayer(conninfo=sqlite_conninfo, storage_provider=storage_client)
+    # 配置本地文件存储路径
+    local_storage_path = f"./{data_path.name}/uploads"  # 存储上传文件的目录
+    # 创建本地存储客户端
+    storage_client = LocalStorageClient(local_storage_path)
+    # 创建 SQLite 数据层
+    data_layer = SQLAlchemyDataLayer(conninfo=sqlite_conninfo_with_params, storage_provider=storage_client)
 
-    # return data_layer
+    return data_layer
 
 
 # @cl.set_chat_profiles
@@ -241,11 +343,41 @@ async def set_starters():
     ]
 
 
+@cl.on_mcp_connect
+async def on_mcp_connect(connection, session: ClientSession):
+    """Called when an MCP connection is established"""
+    print(">>> on_mcp_connect", connection.name)
+    # List available tools
+    result = await session.list_tools()
+
+    # Process tool metadata
+    tools = [
+        {
+            "name": t.name,
+            "description": t.description,
+            "input_schema": t.inputSchema,
+        }
+        for t in result.tools
+    ]
+
+    # Store tools for later use
+    mcp_tools = cl.user_session.get("mcp_tools", {})
+    mcp_tools[connection.name] = tools
+    print(">>> mcp_tools", mcp_tools)
+    cl.user_session.set("mcp_tools", mcp_tools)
+
+
+@cl.on_mcp_disconnect
+async def on_mcp_disconnect(name: str, session: ClientSession):
+    """Called when an MCP connection is terminated"""
+    # Your cleanup code here
+    # This handler is optional
+    print(">>> on_mcp_disconnect", name)
+
+
 @cl.on_chat_start
 async def chat_start():
     print(">>> on_chat_start, 新建会话也会触发！！！")
-
-    start_ollama()
 
     # 设置命令
     await cl.context.emitter.set_commands(commands)
@@ -294,6 +426,42 @@ async def chat_start():
     )
     # 将客户端存入用户会话，方便后续调用
 
+    # ############################################### Create the TaskList
+    task_list = cl.TaskList()
+    task_list.status = "Running..."
+
+    # Create a task and put it in the running state
+    task1 = cl.Task(title="Processing data", status=cl.TaskStatus.RUNNING)
+    await task_list.add_task(task1)
+    # Create another task that is in the ready state
+    task2 = cl.Task(title="Performing calculations")
+    await task_list.add_task(task2)
+
+    # Optional: link a message to each task to allow task navigation in the chat history
+    message = await cl.Message(content="Started processing data").send()
+    task1.forId = message.id
+
+    # Update the task list in the interface
+    await task_list.send()
+
+    # Perform some action on your end
+    await cl.sleep(5)
+
+    # Update the task statuses
+    task1.status = cl.TaskStatus.DONE
+    task2.status = cl.TaskStatus.FAILED
+    task_list.status = "Failed"
+    await task_list.send()
+    # ###############################################
+    await cl.ElementSidebar.set_title("任务面板")
+    await cl.ElementSidebar.set_elements(
+        [],
+        key="task-panel",
+    )
+
+    mcp_tools = cl.user_session.get("mcp_tools", [])
+    print(">>> chat_start's mcp_tools", mcp_tools)
+
     llm = ChatOllama(
         # qwen2.5:1.5b, deepseek-v3.1:671b-cloud, deepseek-r1:8b
         model="deepseek-r1:8b",  # 选择任何你本地已有的模型,deepseek-r1:8b不支持工具调用
@@ -303,7 +471,7 @@ async def chat_start():
 
     agent = create_agent(
         model=llm,
-        tools=[get_weather],
+        tools=[get_weather] + mcp_tools,
         system_prompt="You are a helpful assistant",
     )
     cl.user_session.set("agent", agent)
